@@ -211,6 +211,15 @@ def init_log():
         format=format_record,
         colorize=True,
     )
+    log_dir = utils.storage_dir("logs", create=True)
+    logger.add(
+        os.path.join(log_dir, "webui.log"),
+        level=_lvl,
+        format=format_record,
+        rotation="10 MB",
+        retention="7 days",
+        encoding="utf-8"
+    )
 
 
 init_log()
@@ -695,10 +704,26 @@ uploaded_audio_file = None
 with left_panel:
     with st.container(border=True):
         st.write(tr("Video Script Settings"))
-        params.video_subject = st.text_input(
-            tr("Video Subject"),
-            key="video_subject",
-        ).strip()
+        
+        subject_input_mode = st.radio(
+            tr("Subject Input Mode"),
+            options=[tr("Single Subject"), tr("Batch from File")],
+            horizontal=True
+        )
+        
+        batch_subjects = []
+        if subject_input_mode == tr("Batch from File"):
+            subject_file = st.file_uploader(tr("Upload Video Subjects (.txt)"), type=["txt"])
+            if subject_file is not None:
+                content = subject_file.read().decode("utf-8")
+                batch_subjects = [line.strip() for line in content.split("\n") if line.strip()]
+                st.info(f"Found {len(batch_subjects)} subjects")
+            params.video_subject = ""
+        else:
+            params.video_subject = st.text_input(
+                tr("Video Subject"),
+                key="video_subject",
+            ).strip()
 
         video_languages = [
             (tr("Auto Detect"), ""),
@@ -1458,11 +1483,19 @@ with right_panel:
 start_button = st.button(tr("Generate Video"), use_container_width=True, type="primary")
 if start_button:
     config.save_config()
-    task_id = str(uuid4())
-    if not params.video_subject and not params.video_script:
-        st.error(tr("Video Script and Subject Cannot Both Be Empty"))
-        scroll_to_bottom()
-        st.stop()
+    
+    if subject_input_mode == tr("Batch from File"):
+        if not batch_subjects:
+            st.error(tr("Please upload a valid .txt file with at least one subject"))
+            scroll_to_bottom()
+            st.stop()
+        subjects_to_process = batch_subjects
+    else:
+        if not params.video_subject and not params.video_script:
+            st.error(tr("Video Script and Subject Cannot Both Be Empty"))
+            scroll_to_bottom()
+            st.stop()
+        subjects_to_process = [params.video_subject]
 
     if params.video_source not in ["pexels", "pixabay", "coverr", "local"]:
         st.error(tr("Please Select a Valid Video Source"))
@@ -1485,7 +1518,7 @@ if start_button:
         st.stop()
 
     if uploaded_audio_file:
-        task_dir = utils.task_dir(task_id)
+        task_dir = utils.task_dir(str(uuid4())) # Temp task_dir for custom audio if needed
         # 上传文件名来自浏览器，不能直接拼到磁盘路径里；这里只保留扩展名，
         # 并使用固定文件名保存到当前任务目录，避免路径穿越或特殊字符问题。
         _, audio_ext = os.path.splitext(os.path.basename(uploaded_audio_file.name))
@@ -1536,17 +1569,39 @@ if start_button:
             return
         with log_container:
             log_records.append(msg)
+            # Limit the log to the last 100 lines for performance
+            if len(log_records) > 100:
+                log_records.pop(0)
             st.code("\n".join(log_records))
 
     logger.add(log_received)
 
-    st.toast(tr("Generating Video"))
-    logger.info(tr("Start Generating Video"))
-    logger.info(utils.to_json(params))
-    scroll_to_bottom()
+    total_tasks = len(subjects_to_process)
+    success_count = 0
+    fail_count = 0
+    
+    for idx, current_subject in enumerate(subjects_to_process):
+        task_id = str(uuid4())
+        
+        if subject_input_mode == tr("Batch from File"):
+            params.video_subject = current_subject
+            params.video_script = "" # ensure script generates anew for each subject
 
-    result = tm.start(task_id=task_id, params=params)
-    if not result or "videos" not in result:
+        st.toast(tr("Generating Video") + f" ({idx + 1}/{total_tasks})")
+        logger.info(tr("Start Generating Video") + f" - {current_subject} ({idx + 1}/{total_tasks})")
+        logger.info(utils.to_json(params))
+        scroll_to_bottom()
+
+        result = tm.start(task_id=task_id, params=params)
+        if not result or "videos" not in result:
+            logger.error(tr("Video Generation Failed") + f" for: {current_subject}")
+            fail_count += 1
+        else:
+            success_count += 1
+            
+    if total_tasks > 1:
+        st.success(f"Batch Processing Completed! Success: {success_count}, Failed: {fail_count}")
+    elif fail_count > 0:
         st.error(tr("Video Generation Failed"))
         logger.error(tr("Video Generation Failed"))
         scroll_to_bottom()
