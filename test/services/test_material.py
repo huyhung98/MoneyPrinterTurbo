@@ -127,6 +127,58 @@ class TestMaterialTlsVerification(unittest.TestCase):
 
         self.assertEqual(result, [])
 
+    def test_search_coverr_uses_tls_verification_by_default(self):
+        config.app["coverr_api_keys"] = ["coverr-key"]
+        config.app.pop("tls_verify", None)
+        config.proxy.clear()
+
+        fake_response = SimpleNamespace(
+            json=lambda: {
+                "hits": [
+                    {
+                        "id": "123",
+                        "duration": "10.5",
+                        "is_vertical": True,
+                        "urls": {
+                            "mp4_download": "https://example.com/coverr-portrait.mp4",
+                        }
+                    },
+                    {
+                        "id": "456",
+                        "duration": 5.0,
+                        "is_vertical": False,
+                        "urls": {
+                            "mp4": "https://example.com/coverr-landscape.mp4",
+                        }
+                    }
+                ]
+            }
+        )
+
+        with patch("app.services.material.requests.get", return_value=fake_response) as get:
+            # Search with portrait aspect ratio
+            results_portrait = material.search_videos_coverr("nature", minimum_duration=1, video_aspect="9:16")
+            
+            # Search with landscape aspect ratio
+            # Reset mock to check the next call
+            get.reset_mock()
+            results_landscape = material.search_videos_coverr("nature", minimum_duration=1, video_aspect="16:9")
+
+        # Assert portrait result
+        self.assertEqual(len(results_portrait), 1)
+        self.assertEqual(results_portrait[0].url, "https://example.com/coverr-portrait.mp4")
+        self.assertEqual(results_portrait[0].duration, 10) # 10.5 cast to int is 10
+        self.assertEqual(results_portrait[0].provider, "coverr")
+
+        # Assert landscape result
+        self.assertEqual(len(results_landscape), 1)
+        self.assertEqual(results_landscape[0].url, "https://example.com/coverr-landscape.mp4")
+        self.assertEqual(results_landscape[0].duration, 5)
+
+        # Assert HTTP header authorization and verification defaults
+        self.assertEqual(get.call_args.kwargs["headers"]["Authorization"], "Bearer coverr-key")
+        self.assertTrue(get.call_args.kwargs["verify"])
+
 
 if __name__ == "__main__":
     unittest.main()

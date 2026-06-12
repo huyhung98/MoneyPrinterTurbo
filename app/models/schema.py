@@ -80,6 +80,7 @@ class VideoParams(BaseModel):
     video_count: Optional[int] = 1
 
     video_source: Optional[str] = "pexels"
+    video_source_aspect: Optional[VideoAspect] = None  # Aspect ratio for downloading source videos; defaults to video_aspect if not set
     video_materials: Optional[List[MaterialInfo]] = (
         None  # Materials used to generate the video
     )

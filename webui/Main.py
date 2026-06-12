@@ -69,7 +69,7 @@ if "video_script_prompt" not in st.session_state:
 if "custom_system_prompt" not in st.session_state:
     st.session_state["custom_system_prompt"] = llm.DEFAULT_SCRIPT_SYSTEM_PROMPT
 if "use_custom_system_prompt" not in st.session_state:
-    st.session_state["use_custom_system_prompt"] = False
+    st.session_state["use_custom_system_prompt"] = True
 if "ui_language" not in st.session_state:
     st.session_state["ui_language"] = config.ui.get("language", system_locale)
 if "local_video_materials" not in st.session_state:
@@ -572,6 +572,12 @@ if not config.app.get("hide_config", False):
             )
             save_keys_to_config("pixabay_api_keys", pixabay_api_key)
 
+            coverr_api_key = get_keys_from_config("coverr_api_keys")
+            coverr_api_key = st.text_input(
+                tr("Coverr API Key"), value=coverr_api_key, type="password"
+            )
+            save_keys_to_config("coverr_api_keys", coverr_api_key)
+
 llm_provider = config.app.get("llm_provider", "").lower()
 panel = st.columns(3)
 left_panel = panel[0]
@@ -689,6 +695,7 @@ with middle_panel:
         video_sources = [
             (tr("Pexels"), "pexels"),
             (tr("Pixabay"), "pixabay"),
+            (tr("Coverr"), "coverr"),
             (tr("Local file"), "local"),
             (tr("TikTok"), "douyin"),
             (tr("Bilibili"), "bilibili"),
@@ -708,6 +715,23 @@ with middle_panel:
         )
         params.video_source = video_sources[selected_index][1]
         config.app["video_source"] = params.video_source
+
+        # Show source video aspect ratio option only for API sources
+        if params.video_source in ["pexels", "pixabay", "coverr"]:
+            source_aspect_options = [
+                (tr("Same as output"), ""),
+                (tr("Portrait"), VideoAspect.portrait.value),
+                (tr("Landscape"), VideoAspect.landscape.value),
+            ]
+            selected_source_aspect = st.selectbox(
+                tr("Source Video Ratio"),
+                options=range(len(source_aspect_options)),
+                format_func=lambda x: source_aspect_options[x][0],
+                index=0,
+                help=tr("Choose the aspect ratio for downloading source videos. 'Same as output' uses the output video ratio."),
+            )
+            source_aspect_value = source_aspect_options[selected_source_aspect][1]
+            params.video_source_aspect = VideoAspect(source_aspect_value) if source_aspect_value else None
 
         if params.video_source == "local":
             # Streamlit 的文件类型校验对扩展名大小写敏感，这里同时放行大小写两种形式。
@@ -1268,7 +1292,7 @@ if start_button:
         scroll_to_bottom()
         st.stop()
 
-    if params.video_source not in ["pexels", "pixabay", "local"]:
+    if params.video_source not in ["pexels", "pixabay", "coverr", "local"]:
         st.error(tr("Please Select a Valid Video Source"))
         scroll_to_bottom()
         st.stop()
@@ -1280,6 +1304,11 @@ if start_button:
 
     if params.video_source == "pixabay" and not config.app.get("pixabay_api_keys", ""):
         st.error(tr("Please Enter the Pixabay API Key"))
+        scroll_to_bottom()
+        st.stop()
+
+    if params.video_source == "coverr" and not config.app.get("coverr_api_keys", ""):
+        st.error(tr("Please Enter the Coverr API Key"))
         scroll_to_bottom()
         st.stop()
 
