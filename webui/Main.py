@@ -3,6 +3,7 @@ import sys
 import webbrowser
 from uuid import UUID, uuid4
 
+import requests
 import streamlit as st
 from loguru import logger
 
@@ -70,6 +71,10 @@ if "custom_system_prompt" not in st.session_state:
     st.session_state["custom_system_prompt"] = llm.DEFAULT_SCRIPT_SYSTEM_PROMPT
 if "use_custom_system_prompt" not in st.session_state:
     st.session_state["use_custom_system_prompt"] = True
+if "match_materials_to_script" not in st.session_state:
+    st.session_state["match_materials_to_script"] = bool(
+        config.app.get("match_materials_to_script", False)
+    )
 if "ui_language" not in st.session_state:
     st.session_state["ui_language"] = config.ui.get("language", system_locale)
 if "local_video_materials" not in st.session_state:
@@ -112,6 +117,7 @@ support_locales = [
     "de-DE",
     "en-US",
     "fr-FR",
+    "ru-RU",
     "vi-VN",
     "th-TH",
     "tr-TR",
@@ -216,6 +222,35 @@ def tr(key):
     loc = locales.get(st.session_state["ui_language"], {})
     return loc.get("Translation", {}).get(key, key)
 
+@st.cache_data(ttl=300, show_spinner=False)
+def get_groq_model_ids(api_key: str, base_url: str) -> list[str]:
+    if not api_key:
+        return []
+
+    normalized_base_url = (base_url or "https://api.groq.com/openai/v1").strip().rstrip("/")
+    models_url = f"{normalized_base_url}/models"
+
+    try:
+        response = requests.get(
+            models_url,
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=10,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        data = payload.get("data", [])
+
+        model_ids = []
+        for item in data:
+            if isinstance(item, dict):
+                model_id = item.get("id")
+                if isinstance(model_id, str) and model_id.strip():
+                    model_ids.append(model_id.strip())
+
+        return sorted(set(model_ids))
+    except Exception as e:
+        logger.warning(f"failed to fetch groq models: {e}")
+        return []
 
 # 创建基础设置折叠框
 if not config.app.get("hide_config", False):
@@ -247,9 +282,13 @@ if not config.app.get("hide_config", False):
             # 但配置文件和后端逻辑必须继续使用稳定的小写 provider id。
             # 因此这里显式维护 display label 和 provider id 的映射，避免
             # UI 文案变化污染 `config.app["llm_provider"]`。
+            aihubmix_label = f"AIHubMix ({tr('Recommended')})"
+            if config.ui.get("language") == "zh":
+                aihubmix_label = "AIHubMix（推荐）"
             llm_provider_options = [
                 ("OpenAI", "openai"),
-                ("AIHubMix（推荐）", "aihubmix"),
+                (aihubmix_label, "aihubmix"),
+                ("AIML API", "aimlapi"),
                 ("Moonshot", "moonshot"),
                 ("Azure", "azure"),
                 ("Qwen", "qwen"),
@@ -257,6 +296,7 @@ if not config.app.get("hide_config", False):
                 ("ModelScope", "modelscope"),
                 ("Gemini", "gemini"),
                 ("Grok", "grok"),
+                ("Groq", "groq"),
                 ("Ollama", "ollama"),
                 ("G4f", "g4f"),
                 ("OneAPI", "oneapi"),
@@ -346,6 +386,19 @@ if not config.app.get("hide_config", False):
                             - **计费透明**: 按量付费，无会员无包月，免费模型可使用
                             """
 
+            if llm_provider == "aimlapi":
+                if not llm_model_name:
+                    llm_model_name = "openai/gpt-4o-mini"
+                if not llm_base_url:
+                    llm_base_url = "https://api.aimlapi.com/v1"
+                with llm_helper:
+                    tips = """
+                            ##### AIML API Configuration
+                            - **API Key**: create one at https://aimlapi.com/app/keys
+                            - **Base Url**: https://api.aimlapi.com/v1
+                            - **Model Name**: for example `openai/gpt-4o-mini`, `openai/gpt-4o`, `anthropic/claude-sonnet-4.5`, or `google/gemini-3-flash-preview`
+                            """
+
             if llm_provider == "moonshot":
                 if not llm_model_name:
                     llm_model_name = "moonshot-v1-8k"
@@ -426,6 +479,20 @@ if not config.app.get("hide_config", False):
                             - **API Key**: 填写您的 GrokAPI 密钥
                             - **Base Url**: 填写 GrokAPI 的基础 URL
                             - **Model Name**: 比如 grok-4.3
+                            """
+
+            if llm_provider == "groq":
+                if not llm_model_name:
+                    llm_model_name = "llama-3.3-70b-versatile"
+                if not llm_base_url:
+                    llm_base_url = "https://api.groq.com/openai/v1"
+
+                with llm_helper:
+                    tips = """
+                            ##### Groq 配置说明
+                            - **API Key**: [点击到官网申请](https://console.groq.com/keys)
+                            - **Base Url**: 固定为 https://api.groq.com/openai/v1
+                            - **Model Name**: 比如 llama-3.3-70b-versatile
                             """
 
             if llm_provider == "deepseek":
@@ -514,11 +581,45 @@ if not config.app.get("hide_config", False):
             st_llm_base_url = st.text_input(tr("Base Url"), value=llm_base_url)
             st_llm_model_name = ""
             if llm_provider != "ernie":
-                st_llm_model_name = st.text_input(
-                    tr("Model Name"),
-                    value=llm_model_name,
-                    key=f"{llm_provider}_model_name_input",
-                )
+                if llm_provider == "groq":
+                    effective_api_key = st_llm_api_key or llm_api_key
+                    effective_base_url = st_llm_base_url or llm_base_url
+                    groq_models = get_groq_model_ids(
+                        api_key=effective_api_key,
+                        base_url=effective_base_url,
+                    )
+
+                    if groq_models:
+                        selected_index = 0
+                        if llm_model_name in groq_models:
+                            selected_index = groq_models.index(llm_model_name)
+
+                        st_llm_model_name = st.selectbox(
+                            tr("Model Name"),
+                            options=groq_models,
+                            index=selected_index,
+                            key="groq_model_name_select",
+                        )
+                    else:
+                        st_llm_model_name = st.text_input(
+                            tr("Model Name"),
+                            value=llm_model_name,
+                            key="groq_model_name_input",
+                        )
+                        if effective_api_key:
+                            st.caption(
+                                "Unable to load Groq model list right now. You can still enter a model name manually — note it won't be validated until generation."
+                            )
+                        else:
+                            st.caption(
+                                "Add a Groq API key to load available models automatically."
+                            )
+                else:
+                    st_llm_model_name = st.text_input(
+                        tr("Model Name"),
+                        value=llm_model_name,
+                        key=f"{llm_provider}_model_name_input",
+                    )
                 if st_llm_model_name:
                     config.app[f"{llm_provider}_model_name"] = st_llm_model_name
             else:
@@ -585,6 +686,9 @@ middle_panel = panel[1]
 right_panel = panel[2]
 
 params = VideoParams(video_subject="")
+params.match_materials_to_script = bool(
+    st.session_state.get("match_materials_to_script", False)
+)
 uploaded_files = []
 uploaded_audio_file = None
 
@@ -658,7 +762,12 @@ with left_panel:
                     video_script_prompt=params.video_script_prompt,
                     custom_system_prompt=params.custom_system_prompt,
                 )
-                terms = llm.generate_terms(params.video_subject, script)
+                terms = llm.generate_terms(
+                    params.video_subject,
+                    script,
+                    amount=8 if params.match_materials_to_script else 5,
+                    match_script_order=params.match_materials_to_script,
+                )
                 if "Error: " in script:
                     st.error(tr(script))
                 elif "Error: " in terms:
@@ -675,7 +784,12 @@ with left_panel:
                 st.stop()
 
             with st.spinner(tr("Generating Video Keywords")):
-                terms = llm.generate_terms(params.video_subject, params.video_script)
+                terms = llm.generate_terms(
+                    params.video_subject,
+                    params.video_script,
+                    amount=8 if params.match_materials_to_script else 5,
+                    match_script_order=params.match_materials_to_script,
+                )
                 if "Error: " in terms:
                     st.error(tr(terms))
                 else:
@@ -737,7 +851,7 @@ with middle_panel:
             # Streamlit 的文件类型校验对扩展名大小写敏感，这里同时放行大小写两种形式。
             local_file_types = ["mp4", "mov", "avi", "flv", "mkv", "jpg", "jpeg", "png"]
             uploaded_files = st.file_uploader(
-                "Upload Local Files",
+                tr("Upload Local Files"),
                 type=local_file_types + [file_type.upper() for file_type in local_file_types],
                 accept_multiple_files=True,
             )
@@ -779,6 +893,13 @@ with middle_panel:
             (tr("Portrait"), VideoAspect.portrait.value),
             (tr("Landscape"), VideoAspect.landscape.value),
         ]
+        # Coverr 库 99% 是 16:9 横屏,默认竖屏会让画面被大量黑边包围。
+        # 用 source-specific widget key 让每个 source 各自记忆 aspect 选择:
+        #   - 首次切到 coverr → 默认 Landscape(index=1)
+        #   - 其他 source 沿用 Portrait(index=0)
+        #   - 用户在某 source 下手动改过 aspect,session_state 会记住,
+        #     下次回到同一 source 时尊重用户选择,不会再被强制覆盖。
+        default_aspect_index = 1 if params.video_source == "coverr" else 0
         selected_index = st.selectbox(
             tr("Video Ratio"),
             options=range(
@@ -787,6 +908,8 @@ with middle_panel:
             format_func=lambda x: video_aspect_ratios[x][
                 0
             ],  # The label is displayed to the user
+            index=default_aspect_index,
+            key=f"video_aspect_for_{params.video_source}",
         )
         params.video_aspect = VideoAspect(video_aspect_ratios[selected_index][1])
 
@@ -800,6 +923,15 @@ with middle_panel:
         )
 
         with st.expander(tr("Advanced Video Settings"), expanded=False):
+            # 默认关闭，避免影响老用户的随机素材体验。开启后只改变关键词和素材
+            # 下载/拼接顺序，用于改善画面主题早于或晚于旁白的问题。
+            params.match_materials_to_script = st.checkbox(
+                tr("Match Materials to Script Order"),
+                help=tr("Match Materials to Script Order Help"),
+                key="match_materials_to_script",
+            )
+            config.app["match_materials_to_script"] = params.match_materials_to_script
+
             video_codec_options = [
                 ("libx264 (CPU)", "libx264"),
                 ("NVIDIA NVENC (h264_nvenc)", "h264_nvenc"),
@@ -1220,12 +1352,16 @@ with right_panel:
                 params.rounded_subtitle_background
             )
     with st.expander(tr("Click to show API Key management"), expanded=False):
-        st.subheader(tr("Manage Pexels and Pixabay API Keys"))
+        st.subheader(tr("Manage Pexels, Pixabay and Coverr API Keys"))
 
-        col1, col2 = st.tabs(["Pexels API Keys", "Pixabay API Keys"])
+        col1, col2, col3 = st.tabs([
+            tr("Pexels API Keys"),
+            tr("Pixabay API Keys"),
+            tr("Coverr API Keys"),
+        ])
 
         with col1:
-            st.subheader("Pexels API Keys")
+            st.subheader(tr("Pexels API Keys"))
             if config.app["pexels_api_keys"]:
                 st.write(tr("Current Keys:"))
                 for key in config.app["pexels_api_keys"]:
@@ -1254,7 +1390,7 @@ with right_panel:
                     st.success(tr("Pexels API Key deleted successfully"))
 
         with col2:
-            st.subheader("Pixabay API Keys")
+            st.subheader(tr("Pixabay API Keys"))
 
             if config.app["pixabay_api_keys"]:
                 st.write(tr("Current Keys:"))
@@ -1282,6 +1418,42 @@ with right_panel:
                     config.app["pixabay_api_keys"].remove(delete_key)
                     config.save_config()
                     st.success(tr("Pixabay API Key deleted successfully"))
+
+        with col3:
+            st.subheader(tr("Coverr API Keys"))
+
+            # 与 pexels/pixabay 不同,coverr_api_keys 是 PR 新增配置项,
+            # 老用户的 config.toml 不一定包含,这里先兜底初始化为空列表,
+            # 防止下面 .append / 索引访问触发 KeyError。
+            if "coverr_api_keys" not in config.app or config.app["coverr_api_keys"] is None:
+                config.app["coverr_api_keys"] = []
+
+            if config.app["coverr_api_keys"]:
+                st.write(tr("Current Keys:"))
+                for key in config.app["coverr_api_keys"]:
+                    st.code(key)
+            else:
+                st.info(tr("No Coverr API Keys currently"))
+
+            new_key = st.text_input(tr("Add Coverr API Key"), key="coverr_new_key")
+            if st.button(tr("Add Coverr API Key")):
+                if new_key and new_key not in config.app["coverr_api_keys"]:
+                    config.app["coverr_api_keys"].append(new_key)
+                    config.save_config()
+                    st.success(tr("Coverr API Key added successfully"))
+                elif new_key in config.app["coverr_api_keys"]:
+                    st.warning(tr("This API Key already exists"))
+                else:
+                    st.error(tr("Please enter a valid API Key"))
+
+            if config.app["coverr_api_keys"]:
+                delete_key = st.selectbox(
+                    tr("Select Coverr API Key to delete"), config.app["coverr_api_keys"], key="coverr_delete_key"
+                )
+                if st.button(tr("Delete Selected Coverr API Key")):
+                    config.app["coverr_api_keys"].remove(delete_key)
+                    config.save_config()
+                    st.success(tr("Coverr API Key deleted successfully"))
 
 start_button = st.button(tr("Generate Video"), use_container_width=True, type="primary")
 if start_button:
