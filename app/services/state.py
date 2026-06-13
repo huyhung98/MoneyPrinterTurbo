@@ -1,8 +1,12 @@
 import ast
+import json
+import os
 from abc import ABC, abstractmethod
+from threading import Lock
 
 from app.config import config
 from app.models import const
+from app.utils import utils
 
 
 # Base class for state management
@@ -20,17 +24,39 @@ class BaseState(ABC):
         pass
 
 
-# Memory state management
+# Memory state management (Persistent to disk for multi-process sharing)
 class MemoryState(BaseState):
     def __init__(self):
         self._tasks = {}
+        self._lock = Lock()
+        self._state_file = os.path.join(utils.storage_dir(), "state.json")
+        self._load()
+
+    def _load(self):
+        if os.path.exists(self._state_file):
+            try:
+                with open(self._state_file, "r", encoding="utf-8") as f:
+                    self._tasks = json.load(f)
+            except Exception:
+                pass
+
+    def _save(self):
+        try:
+            with open(self._state_file, "w", encoding="utf-8") as f:
+                json.dump(self._tasks, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
 
     def get_all_tasks(self, page: int, page_size: int):
-        start = (page - 1) * page_size
-        end = start + page_size
-        tasks = list(self._tasks.values())
-        total = len(tasks)
-        return tasks[start:end], total
+        with self._lock:
+            self._load()
+            start = (page - 1) * page_size
+            end = start + page_size
+            tasks = list(self._tasks.values())
+            # Reverse tasks to show newest first if we assume insertion order is chronological
+            tasks.reverse()
+            total = len(tasks)
+            return tasks[start:end], total
 
     def update_task(
         self,
@@ -43,19 +69,30 @@ class MemoryState(BaseState):
         if progress > 100:
             progress = 100
 
-        self._tasks[task_id] = {
-            "task_id": task_id,
-            "state": state,
-            "progress": progress,
-            **kwargs,
-        }
+        with self._lock:
+            self._load()
+            if task_id not in self._tasks:
+                self._tasks[task_id] = {}
+            
+            self._tasks[task_id].update({
+                "task_id": task_id,
+                "state": state,
+                "progress": progress,
+                **kwargs,
+            })
+            self._save()
 
     def get_task(self, task_id: str):
-        return self._tasks.get(task_id, None)
+        with self._lock:
+            self._load()
+            return self._tasks.get(task_id, None)
 
     def delete_task(self, task_id: str):
-        if task_id in self._tasks:
-            del self._tasks[task_id]
+        with self._lock:
+            self._load()
+            if task_id in self._tasks:
+                del self._tasks[task_id]
+            self._save()
 
 
 # Redis state management

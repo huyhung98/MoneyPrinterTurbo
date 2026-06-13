@@ -80,19 +80,25 @@ _SUPPORTED_VIDEO_CODECS = (
 _runtime_disabled_video_codecs = set()
 
 
-def _prioritize_unique_source_clips(
+def _score_and_sort_clips(
     subclipped_items: List[SubClippedVideoClip],
     concat_mode: VideoConcatMode,
+    max_clip_duration: int = 5,
 ) -> List[SubClippedVideoClip]:
     """
-    优先让每个源素材只出现一次，降低成片里同一素材反复出现的概率。
+    Score and sort clips by source diversity, duration quality, and random jitter.
 
-    线上素材经常会遇到“一个长视频被切成多个短片段”的情况。旧逻辑在
-    random 模式下直接打乱所有短片段，导致同一个源视频的多个切片可能
-    分布在开头和中间，用户会感知为素材重复。本函数只调整片段顺序：
-    先放每个源文件里最长的一个片段，剩余片段作为兜底；当素材总时长不足时，
-    仍然允许后续片段补齐音频长度，避免破坏视频生成成功率。优先选择最长
-    片段是为了避免随机选中视频尾部的零碎短片段，导致明明有足够素材却过早复用。
+    Compared to the old primary/overflow binary split, this function uses
+    continuous scores for finer-grained ordering:
+
+    - source_bonus (10 pts): clips from not-yet-seen sources rank much higher,
+      ensuring different source files appear before any repeats.
+    - duration_score (0~1 pts): clips closer to max_clip_duration score higher,
+      avoiding short tail fragments that waste visual real estate.
+    - jitter (0~1.5 pts): random perturbation prevents identical orderings
+      across multiple generation runs.
+
+    In sequential mode, no reordering is performed.
     """
     if not subclipped_items:
         return []
@@ -101,26 +107,27 @@ def _prioritize_unique_source_clips(
     if concat_mode_value != VideoConcatMode.random.value:
         return subclipped_items
 
-    grouped_items: dict[str, list[SubClippedVideoClip]] = {}
-    for item in subclipped_items:
-        grouped_items.setdefault(item.source_file_path, []).append(item)
+    seen_sources: set[str] = set()
+    scored: list[tuple[float, int, SubClippedVideoClip]] = []
 
-    primary_items = []
-    overflow_items = []
-    for items in grouped_items.values():
-        primary_item = max(items, key=lambda item: item.duration)
-        primary_items.append(primary_item)
-        overflow_items.extend(item for item in items if item is not primary_item)
+    for idx, clip in enumerate(subclipped_items):
+        source_bonus = 10.0 if clip.source_file_path not in seen_sources else 0.0
+        duration_score = clip.duration / max(max_clip_duration, 1)
+        jitter = random.uniform(0, 1.5)
+        total = source_bonus + duration_score + jitter
+        scored.append((total, idx, clip))
+        seen_sources.add(clip.source_file_path)
 
-    random.shuffle(primary_items)
-    random.shuffle(overflow_items)
+    scored.sort(key=lambda x: x[0], reverse=True)
+
     logger.info(
-        "prioritized unique video materials, "
-        f"sources: {len(grouped_items)}, "
-        f"primary clips: {len(primary_items)}, "
-        f"fallback clips: {len(overflow_items)}"
+        "scored and sorted video clips, "
+        f"unique sources: {len(seen_sources)}, "
+        f"total clips: {len(scored)}, "
+        f"top score: {scored[0][0]:.2f}, "
+        f"bottom score: {scored[-1][0]:.2f}"
     )
-    return primary_items + overflow_items
+    return [clip for _, _, clip in scored]
 
 
 def get_ffmpeg_binary():
@@ -536,7 +543,10 @@ def combine_videos(
         start_time = 0
 
         while start_time < clip_duration:
-            end_time = min(start_time + max_clip_duration, clip_duration)
+            # Randomize clip length (80%-100% of max) so repeated clips
+            # from the same source feel visually different each time.
+            jittered_duration = max_clip_duration * random.uniform(0.8, 1.0)
+            end_time = min(start_time + jittered_duration, clip_duration)
 
             # 保留所有有效分段。
             # 这样既不会丢掉“整段视频本身就短于 max_clip_duration”的素材，
@@ -557,9 +567,10 @@ def combine_videos(
             if video_concat_mode.value == VideoConcatMode.sequential.value:
                 break
 
-    subclipped_items = _prioritize_unique_source_clips(
+    subclipped_items = _score_and_sort_clips(
         subclipped_items=subclipped_items,
         concat_mode=video_concat_mode,
+        max_clip_duration=max_clip_duration,
     )
         
     logger.debug(f"total subclipped items: {len(subclipped_items)}")
@@ -655,15 +666,35 @@ def combine_videos(
         except Exception as e:
             logger.error(f"failed to process clip: {str(e)}")
     
-    # loop processed clips until the video duration matches or exceeds the audio duration.
-    if video_duration < audio_duration:
+    # Loop processed clips using max-gap scheduling: each iteration picks
+    # the clip whose source was used longest ago, preventing the same
+    # source from appearing back-to-back across cycle boundaries.
+    if video_duration < audio_duration and processed_clips:
         logger.warning(f"video duration ({video_duration:.2f}s) is shorter than audio duration ({audio_duration:.2f}s), looping clips to match audio length.")
         base_clips = processed_clips.copy()
-        for clip in itertools.cycle(base_clips):
-            if video_duration >= audio_duration:
-                break
-            processed_clips.append(clip)
-            video_duration += clip.duration
+
+        # Track last-used position index for each source file
+        last_used: dict[str, int] = {}
+        for i, clip in enumerate(processed_clips):
+            last_used[clip.source_file_path] = i
+
+        current_idx = len(processed_clips)
+        while video_duration < audio_duration:
+            # Score each candidate by gap since last use (larger = better)
+            candidates: list[tuple[float, SubClippedVideoClip]] = []
+            for clip in base_clips:
+                gap = current_idx - last_used.get(clip.source_file_path, -999)
+                score = gap + random.uniform(0, 1.0)
+                candidates.append((score, clip))
+
+            candidates.sort(key=lambda x: x[0], reverse=True)
+            best_clip = candidates[0][1]
+
+            processed_clips.append(best_clip)
+            last_used[best_clip.source_file_path] = current_idx
+            video_duration += best_clip.duration
+            current_idx += 1
+
         logger.info(f"video duration: {video_duration:.2f}s, audio duration: {audio_duration:.2f}s, looped {len(processed_clips)-len(base_clips)} clips")
      
     # merge video clips progressively, avoid loading all videos at once to avoid memory overflow

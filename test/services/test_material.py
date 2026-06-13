@@ -294,25 +294,47 @@ class TestCoverrProvider(unittest.TestCase):
                     {
                         "id": "shortvid",
                         "duration": 3,  # below minimum
+                        "is_vertical": True,
                         "urls": {"mp4_download": "https://example.com/a.mp4"},
                     },
                     {
                         "id": "stringdur",
                         "duration": "10.500000",  # string accepted
+                        "is_vertical": True,
                         "urls": {"mp4_download": "https://example.com/b.mp4"},
                     },
+                    {
+                        "id": "landscape",
+                        "duration": 5.0,
+                        "is_vertical": False,
+                        "urls": {"mp4": "https://example.com/coverr-landscape.mp4"},
+                    }
                 ]
             }
         )
 
-        with patch(
-            "app.services.material.requests.get", return_value=fake_response
-        ):
-            results = material.search_videos_coverr("x", minimum_duration=5)
+        with patch("app.services.material.requests.get", return_value=fake_response) as get:
+            # Search with portrait aspect ratio
+            results_portrait = material.search_videos_coverr("nature", minimum_duration=5, video_aspect="9:16")
+            
+            # Search with landscape aspect ratio
+            get.reset_mock()
+            results_landscape = material.search_videos_coverr("nature", minimum_duration=5, video_aspect="16:9")
 
-        self.assertEqual(len(results), 1)
-        self.assertEqual(results[0].duration, 10)
-        self.assertEqual(results[0].url, "https://example.com/b.mp4")
+        # Assert portrait result
+        self.assertEqual(len(results_portrait), 1)
+        self.assertEqual(results_portrait[0].url, "https://example.com/b.mp4")
+        self.assertEqual(results_portrait[0].duration, 10)
+        self.assertEqual(results_portrait[0].provider, "coverr")
+
+        # Assert landscape result
+        self.assertEqual(len(results_landscape), 1)
+        self.assertEqual(results_landscape[0].url, "https://example.com/coverr-landscape.mp4")
+        self.assertEqual(results_landscape[0].duration, 5)
+
+        # Assert HTTP header authorization and verification defaults
+        self.assertEqual(get.call_args.kwargs["headers"]["Authorization"], "Bearer coverr-key")
+        self.assertTrue(get.call_args.kwargs["verify"])
 
     def test_search_coverr_skips_invalid_items(self):
         """缺 id 或缺 urls.mp4_download 的条目应被跳过,不应抛异常。"""
