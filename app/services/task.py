@@ -245,7 +245,11 @@ def generate_final_videos(
         _progress += 50 / params.video_count / 2
         sm.state.update_task(task_id, progress=_progress)
 
-        final_video_path = path.join(utils.task_dir(task_id), f"final-{index}.mp4")
+        import re
+        safe_subject = re.sub(r'[\\/*?:"<>|\n\r]', "", params.video_subject).strip() if params.video_subject else ""
+        base_name = safe_subject if safe_subject else "final"
+        final_video_name = f"{base_name}-{index}.mp4" if params.video_count > 1 else f"{base_name}.mp4"
+        final_video_path = path.join(utils.task_dir(task_id), final_video_name)
 
         logger.info(f"\n\n## generating video: {index} => {final_video_path}")
         video.generate_video(
@@ -267,7 +271,8 @@ def generate_final_videos(
 
 def start(task_id, params: VideoParams, stop_at: str = "video"):
     logger.info(f"start task: {task_id}, stop_at: {stop_at}")
-    sm.state.update_task(task_id, state=const.TASK_STATE_PROCESSING, progress=5)
+    sm.state.update_task(task_id, state=const.TASK_STATE_PROCESSING, progress=5, params=params.model_dump())
+
 
     # 1. Generate script
     video_script = generate_script(task_id, params)
