@@ -440,10 +440,10 @@ class TestVideoService(unittest.TestCase):
                 )
                 self.assertEqual(result, combined_video_path)
 
-    def test_score_and_sort_clips_uses_each_source_before_reuse(self):
+    def test_prioritize_unique_source_clips_uses_each_source_before_reuse(self):
         """
-        In random mode, clips from different sources should appear before
-        any source repeats, thanks to the 10-point source uniqueness bonus.
+        随机模式下，一个长素材会被拆成多个片段。调度层应先让每个源素材
+        至少出现一次，再使用同一源素材的其他切片，降低用户感知到的重复。
         """
         clips = [
             vd.SubClippedVideoClip("a.mp4", 0, 4, source_file_path="a.mp4"),
@@ -453,19 +453,18 @@ class TestVideoService(unittest.TestCase):
             vd.SubClippedVideoClip("c.mp4", 0, 4, source_file_path="c.mp4"),
         ]
 
-        ordered_clips = vd._score_and_sort_clips(
+        ordered_clips = vd._prioritize_unique_source_clips(
             subclipped_items=clips,
             concat_mode=vd.VideoConcatMode.random,
-            max_clip_duration=5,
         )
 
         self.assertCountEqual(ordered_clips, clips)
         first_round_sources = [clip.source_file_path for clip in ordered_clips[:3]]
         self.assertCountEqual(first_round_sources, ["a.mp4", "b.mp4", "c.mp4"])
 
-    def test_score_and_sort_clips_keeps_sequential_order(self):
+    def test_prioritize_unique_source_clips_keeps_sequential_order(self):
         """
-        Sequential mode should not reorder clips at all.
+        顺序模式本身只取每个素材的首段，不应被随机调度逻辑改变顺序。
         """
         clips = [
             vd.SubClippedVideoClip("a.mp4", 0, 4, source_file_path="a.mp4"),
@@ -473,44 +472,37 @@ class TestVideoService(unittest.TestCase):
             vd.SubClippedVideoClip("c.mp4", 0, 4, source_file_path="c.mp4"),
         ]
 
-        ordered_clips = vd._score_and_sort_clips(
+        ordered_clips = vd._prioritize_unique_source_clips(
             subclipped_items=clips,
             concat_mode=vd.VideoConcatMode.sequential,
-            max_clip_duration=5,
         )
 
         self.assertEqual(ordered_clips, clips)
 
-    def test_score_and_sort_clips_prefers_long_clips(self):
+    def test_prioritize_unique_source_clips_prefers_long_primary_clip(self):
         """
-        When multiple clips from different sources all get the first-seen
-        bonus, longer clips should still score higher due to duration_score.
+        同一个源素材的最后一个切片可能短于目标片段时长。首轮去重时应优先
+        选择较长片段，否则会因为累计时长不足而提前复用素材。
         """
-        # Two sources, each with one clip. Both get the 10-point bonus.
-        # The one with longer duration should rank first.
-        short_clip = vd.SubClippedVideoClip(
-            "a.mp4", 0, 1, source_file_path="a.mp4"
+        short_tail = vd.SubClippedVideoClip(
+            "a.mp4", 6, 6.5, source_file_path="a.mp4"
         )
-        long_clip = vd.SubClippedVideoClip(
-            "b.mp4", 0, 5, source_file_path="b.mp4"
+        full_clip = vd.SubClippedVideoClip(
+            "a.mp4", 0, 3, source_file_path="a.mp4"
+        )
+        other_source = vd.SubClippedVideoClip(
+            "b.mp4", 0, 3, source_file_path="b.mp4"
         )
 
-        # Run multiple times to account for jitter
-        long_first_count = 0
-        trials = 50
-        for _ in range(trials):
-            ordered_clips = vd._score_and_sort_clips(
-                subclipped_items=[short_clip, long_clip],
-                concat_mode=vd.VideoConcatMode.random,
-                max_clip_duration=5,
-            )
-            if ordered_clips[0].source_file_path == "b.mp4":
-                long_first_count += 1
+        ordered_clips = vd._prioritize_unique_source_clips(
+            subclipped_items=[short_tail, full_clip, other_source],
+            concat_mode=vd.VideoConcatMode.random,
+        )
 
-        # With source_bonus equal (both 10), duration_score difference is
-        # 1.0 vs 0.2 = 0.8 gap. Jitter range is 0-1.5, so the longer clip
-        # should win most of the time (statistically >60%).
-        self.assertGreater(long_first_count, trials * 0.4)
+        first_a_clip = next(
+            clip for clip in ordered_clips if clip.source_file_path == "a.mp4"
+        )
+        self.assertEqual(first_a_clip, full_clip)
     
     def test_wrap_text(self):
         """test text wrapping function"""
