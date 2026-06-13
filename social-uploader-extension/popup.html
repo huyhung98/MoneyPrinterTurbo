@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <link rel="stylesheet" href="popup.css">
+  <title>Social Auto Uploader</title>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+        <h2>MoneyPrinterTurbo</h2>
+        <span class="badge">TikTok</span>
+    </div>
+    
+    <div class="toggle-container">
+      <label class="switch">
+        <input type="checkbox" id="auto-upload-toggle">
+        <span class="slider round"></span>
+      </label>
+      <span class="toggle-label">Auto-Upload New Videos</span>
+    </div>
+
+    <div id="loading" class="loading">Fetching videos...</div>
+    <div id="video-list" class="video-list"></div>
+    <div id="status" class="status"></div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>
