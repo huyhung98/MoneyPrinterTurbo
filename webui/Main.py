@@ -1376,6 +1376,28 @@ with right_panel:
             config.ui["rounded_subtitle_background"] = (
                 params.rounded_subtitle_background
             )
+
+    with st.container(border=True):
+        st.write(tr("TikTok Auto-Upload (Playwright)"))
+        tiktok_uploader_enabled = st.checkbox("Enable TikTok Auto-Upload", value=config.app.get("tiktok_uploader_enabled", False))
+        config.app["tiktok_uploader_enabled"] = tiktok_uploader_enabled
+        if tiktok_uploader_enabled:
+            cookies_file_path = config.app.get("tiktok_uploader_cookies_file", "")
+            cookies_file = st.file_uploader("Upload cookies (txt/json)", type=["txt", "json"])
+            if cookies_file:
+                import os
+                os.makedirs("storage", exist_ok=True)
+                ext = cookies_file.name.split('.')[-1]
+                cookies_path = os.path.join("storage", f"tiktok_cookies.{ext}")
+                with open(cookies_path, "wb") as f:
+                    f.write(cookies_file.getbuffer())
+                config.app["tiktok_uploader_cookies_file"] = cookies_path
+                st.success("Cookies uploaded successfully!")
+            elif cookies_file_path and os.path.exists(cookies_file_path):
+                st.info(f"Using cookies file: {cookies_file_path}")
+            else:
+                st.warning("Please upload a valid TikTok cookies.txt file!")
+
     with st.expander(tr("Click to show API Key management"), expanded=False):
         st.subheader(tr("Manage Pexels, Pixabay and Coverr API Keys"))
 

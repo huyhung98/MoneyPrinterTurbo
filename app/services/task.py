@@ -8,7 +8,7 @@ from loguru import logger
 from app.config import config
 from app.models import const
 from app.models.schema import VideoConcatMode, VideoParams
-from app.services import llm, material, subtitle, video, voice, upload_post
+from app.services import llm, material, subtitle, video, voice, upload_post, tiktok_uploader
 from app.services import state as sm
 from app.utils import utils
 
@@ -380,18 +380,27 @@ def start(task_id, params: VideoParams, stop_at: str = "video"):
 
     # 7. Cross-post to TikTok/Instagram (if enabled)
     cross_post_results = []
-    if upload_post.upload_post_service.is_configured() and upload_post.upload_post_service.auto_upload:
-        logger.info("\n\n## cross-posting videos to TikTok/Instagram")
-        for video_path in final_video_paths:
-            result = upload_post.cross_post_video(
-                video_path=video_path,
-                title=params.video_subject or "Check out this video! #shorts #viral"
+    for final_video_path in final_video_paths:
+        if upload_post.upload_post_service.is_configured() and upload_post.upload_post_service.auto_upload:
+            logger.info("Triggering Upload-Post auto-upload...")
+            platforms = upload_post.upload_post_service.platforms
+            
+            # We run this in background so we don't block the task completion
+            import threading
+            thread = threading.Thread(
+                target=upload_post.cross_post_video, 
+                args=(final_video_path, params.video_script, platforms)
             )
-            cross_post_results.append(result)
-            if result.get('success'):
-                logger.info(f"✅ Cross-posted: {video_path}")
-            else:
-                logger.warning(f"⚠️ Failed to cross-post: {video_path} - {result.get('error', 'Unknown error')}")
+            thread.daemon = True
+            thread.start()
+
+        # Check for direct Playwright TikTok Uploader
+        if tiktok_uploader.tiktok_uploader_service.is_configured():
+            logger.info("Triggering Direct Playwright TikTok Uploader...")
+            tiktok_uploader.tiktok_uploader_service.upload_video_background(
+                video_path=final_video_path, 
+                title=f"{params.video_subject}\n\n{params.video_script}"
+            )
 
     kwargs = {
         "videos": final_video_paths,

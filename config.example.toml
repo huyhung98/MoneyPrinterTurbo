@@ -373,3 +373,9 @@ upload_post_platforms = ["tiktok", "instagram"]
 
 # Automatically cross-post videos after generation (if false, you'll need to call the API manually)
 upload_post_auto_upload = false
+
+########## TikTok Playwright Uploader (Method B)
+# This uses playwright to control a hidden browser to upload the video.
+# You must provide a valid cookies.txt file exported from your TikTok account.
+tiktok_uploader_enabled = false
+tiktok_uploader_cookies_file = ""
