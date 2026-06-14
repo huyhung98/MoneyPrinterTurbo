@@ -52,7 +52,7 @@ class TikTokUploaderService:
             target=self.upload_video_sync, 
             args=(video_path, title)
         )
-        thread.daemon = True
+        thread.daemon = False
         thread.start()
 
 tiktok_uploader_service = TikTokUploaderService()
