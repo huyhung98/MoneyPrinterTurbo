@@ -30,7 +30,8 @@ class TikTokUploaderService:
             upload_video(
                 filename=video_path,
                 description=title[:2200],
-                cookies=cookies_file
+                cookies=cookies_file,
+                headless=True
             )
             
             logger.info(f"✅ Video successfully uploaded to TikTok via Playwright!")
