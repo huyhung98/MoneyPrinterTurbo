@@ -15,7 +15,7 @@ class TikTokUploaderService:
         cookies_file = config.app.get("tiktok_uploader_cookies_file", "")
         return bool(enabled and cookies_file and os.path.exists(cookies_file))
 
-    def upload_video_sync(self, video_path: str, title: str):
+    def upload_video_sync(self, video_path: str, title: str, headless: bool = True):
         try:
             from tiktok_uploader.upload import upload_video
             
@@ -25,13 +25,22 @@ class TikTokUploaderService:
                 
             logger.info(f"Starting Playwright to upload video to TikTok: {video_path}")
             
-            cookies_file = config.app.get("tiktok_uploader_cookies_file", "")
+            import json
+            cookies_file = os.path.abspath(config.app.get("tiktok_uploader_cookies_file", ""))
+            
+            kwargs = {}
+            if cookies_file.endswith(".json"):
+                with open(cookies_file, "r") as f:
+                    kwargs["cookies_list"] = json.load(f)
+            else:
+                kwargs["cookies"] = cookies_file
+                
             # Using tiktok_uploader
             upload_video(
                 filename=video_path,
                 description=title[:2200],
-                cookies=cookies_file,
-                headless=True
+                headless=headless,
+                **kwargs
             )
             
             logger.info(f"✅ Video successfully uploaded to TikTok via Playwright!")
