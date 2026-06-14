@@ -8,11 +8,12 @@ import threading
 
 class TikTokUploaderService:
     def __init__(self):
-        self.enabled = config.app.get("tiktok_uploader_enabled", False)
-        self.cookies_file = config.app.get("tiktok_uploader_cookies_file", "")
+        pass
 
     def is_configured(self) -> bool:
-        return bool(self.enabled and self.cookies_file and os.path.exists(self.cookies_file))
+        enabled = config.app.get("tiktok_uploader_enabled", False)
+        cookies_file = config.app.get("tiktok_uploader_cookies_file", "")
+        return bool(enabled and cookies_file and os.path.exists(cookies_file))
 
     def upload_video_sync(self, video_path: str, title: str):
         try:
@@ -24,11 +25,12 @@ class TikTokUploaderService:
                 
             logger.info(f"Starting Playwright to upload video to TikTok: {video_path}")
             
+            cookies_file = config.app.get("tiktok_uploader_cookies_file", "")
             # Using tiktok_uploader
             upload_video(
                 filename=video_path,
                 description=title[:2200],
-                cookies=self.cookies_file
+                cookies=cookies_file
             )
             
             logger.info(f"✅ Video successfully uploaded to TikTok via Playwright!")
