@@ -67,13 +67,17 @@ class TikTokUploaderService:
                 kwargs["cookies"] = cookies_file
                 
             # Using tiktok_uploader
-            upload_video(
+            failed_videos = upload_video(
                 filename=video_path,
                 description=title[:2200],
                 headless=headless,
                 **kwargs
             )
             
+            if failed_videos and len(failed_videos) > 0:
+                logger.error(f"TikTok upload failed for: {failed_videos}")
+                return False
+                
             logger.info(f"✅ Video successfully uploaded to TikTok via Playwright!")
             return True
             

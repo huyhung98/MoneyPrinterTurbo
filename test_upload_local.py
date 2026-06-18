@@ -33,7 +33,7 @@ def test_upload():
     success = tiktok_uploader_service.upload_video_sync(
         video_path=sample_video_path, 
         title=sample_title,
-        headless=False  
+        headless=True  
     )
     
     if success:
