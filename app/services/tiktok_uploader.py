@@ -17,6 +17,37 @@ class TikTokUploaderService:
 
     def upload_video_sync(self, video_path: str, title: str, headless: bool = True):
         try:
+            # 👱‍♀️ ponytail: Monkey patch tiktok-uploader to fix broken TikTok DOM changes
+            # without rewriting the library or creating new abstractions.
+            import tiktok_uploader.upload
+            import time
+            
+            # 1. Skip broken interactivity checkboxes that cause 30s hangs
+            tiktok_uploader.upload._set_interactivity = lambda *args, **kwargs: None
+            
+            # 2. Inject CSS to globally hide joyride tooltips that block typing
+            orig_go_to_upload = tiktok_uploader.upload._go_to_upload
+            def patched_go_to_upload(page):
+                orig_go_to_upload(page)
+                try:
+                    page.add_style_tag(content='[class*="joyride"] { display: none !important; pointer-events: none !important; }')
+                except Exception:
+                    pass
+            tiktok_uploader.upload._go_to_upload = patched_go_to_upload
+
+            # 3. Fix broken "Post" button selector
+            def patched_post_video(page):
+                time.sleep(3)
+                try:
+                    # Click the last button containing 'Post' or 'Đăng'
+                    btn = page.locator('button:has-text("Post"), button:has-text("Đăng")').last
+                    if btn.is_visible():
+                        btn.click()
+                except Exception as e:
+                    from loguru import logger
+                    logger.warning(f"Post click fallback failed: {e}")
+            tiktok_uploader.upload._post_video = patched_post_video
+
             from tiktok_uploader.upload import upload_video
             
             if not os.path.exists(video_path):
