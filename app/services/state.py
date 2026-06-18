@@ -1,6 +1,8 @@
 import ast
 import json
 import os
+import copy
+import threading
 from abc import ABC, abstractmethod
 from threading import Lock
 
@@ -28,7 +30,7 @@ class BaseState(ABC):
 class MemoryState(BaseState):
     def __init__(self):
         self._tasks = {}
-        self._lock = Lock()
+        self._lock = threading.RLock()
         self._state_file = os.path.join(utils.storage_dir(), "state.json")
         self._load()
 
@@ -52,7 +54,7 @@ class MemoryState(BaseState):
             self._load()
             start = (page - 1) * page_size
             end = start + page_size
-            tasks = list(self._tasks.values())
+            tasks = [copy.deepcopy(task) for task in self._tasks.values()]
             # Reverse tasks to show newest first if we assume insertion order is chronological
             tasks.reverse()
             total = len(tasks)
@@ -85,7 +87,8 @@ class MemoryState(BaseState):
     def get_task(self, task_id: str):
         with self._lock:
             self._load()
-            return self._tasks.get(task_id, None)
+            task = self._tasks.get(task_id, None)
+            return copy.deepcopy(task) if task is not None else None
 
     def delete_task(self, task_id: str):
         with self._lock:
@@ -97,6 +100,16 @@ class MemoryState(BaseState):
 
 # Redis state management
 class RedisState(BaseState):
+    """
+    Redis-backed task state.
+
+    Trust boundary: Redis is expected to be private to this application. Task
+    values are written by MoneyPrinterTurbo and converted back from strings for
+    compatibility with existing state records. Do not expose this Redis database
+    to untrusted writers without replacing deserialization with a stricter
+    schema-based format.
+    """
+
     def __init__(self, host="localhost", port=6379, db=0, password=None):
         import redis
 
@@ -172,8 +185,12 @@ class RedisState(BaseState):
     @staticmethod
     def _convert_to_original_type(value):
         """
-        Convert the value from byte string to its original data type.
-        You can extend this method to handle other data types as needed.
+        Convert values written by this application back to common Python types.
+
+        This compatibility parser assumes Redis is inside the application's
+        trust boundary. If Redis can be written by untrusted clients, task state
+        should move to a strict JSON/schema parser instead of open-ended literal
+        conversion.
         """
         value_str = value.decode("utf-8")
 
