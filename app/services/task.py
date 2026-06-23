@@ -458,6 +458,17 @@ def start(task_id, params: VideoParams, stop_at: str = "video"):
             else:
                 logger.warning(f"⚠️ Failed to cross-post: {video_path} - {result.get('error', 'Unknown error')}")
 
+    # ponytail: Just copy it to Drive. Colab or local, who cares, try both.
+    import shutil
+    drive_dir = "/content/drive/MyDrive/TiktokUploads/Pending/" if os.path.exists("/content") else os.path.expanduser("~/Google Drive/MyDrive/TiktokUploads/Pending/")
+    os.makedirs(drive_dir, exist_ok=True)
+    for video_path in final_video_paths:
+        try:
+            shutil.copy2(video_path, drive_dir)
+            logger.info(f"👱‍♀️ Ponytail: Synced {os.path.basename(video_path)} to Drive")
+        except Exception as e:
+            logger.warning(f"Ponytail sync failed: {e}")
+
     kwargs = {
         "videos": final_video_paths,
         "combined_videos": combined_video_paths,
