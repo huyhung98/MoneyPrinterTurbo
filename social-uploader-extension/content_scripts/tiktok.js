@@ -99,6 +99,8 @@ async function processUpload(videoUrl, title, taskId) {
   if (captionEditor) {
     captionEditor.focus();
     // Inject text using execCommand
+    // ponytail: select all text before inserting to avoid duplicate caption
+    document.execCommand('selectAll');
     document.execCommand('insertText', false, title);
     console.log("Caption injected.");
   } else {
