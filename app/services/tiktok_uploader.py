@@ -69,7 +69,26 @@ class TikTokUploaderService:
                             from loguru import logger
                             logger.warning(f"Post click fallback failed: {e}")
                     tiktok_uploader.upload._post_video = patched_post_video
-        
+
+                    # 4. Fix Mac duplicate description issue (Ctrl+A doesn't work on Mac, must use Meta+A)
+                    orig_set_description = tiktok_uploader.upload._set_description
+                    def patched_set_description(page, description):
+                        try:
+                            import platform
+                            desc_locator = page.locator(f"xpath={tiktok_uploader.config.selectors.upload.description}")
+                            desc_locator.wait_for(state="visible", timeout=5000)
+                            desc_locator.click()
+                            if platform.system() == "Darwin":
+                                desc_locator.press("Meta+A")
+                            else:
+                                desc_locator.press("Control+A")
+                            desc_locator.press("Backspace")
+                            time.sleep(0.5)
+                        except Exception:
+                            pass
+                        orig_set_description(page, description)
+                    tiktok_uploader.upload._set_description = patched_set_description
+
                     from tiktok_uploader.upload import upload_video
                     
                     if not os.path.exists(video_path):
